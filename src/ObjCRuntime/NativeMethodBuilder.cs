@@ -36,6 +36,9 @@ namespace MonoMac.ObjCRuntime {
 		private static MethodInfo getobject = typeof (Runtime).GetMethod ("GetNSObject", BindingFlags.Static | BindingFlags.Public);
 		private static MethodInfo gethandle = typeof (NSObject).GetMethod ("get_Handle", BindingFlags.Instance | BindingFlags.Public);
 #endif
+		private static MethodInfo getgenericdelegate = typeof (GenericDelegateFactory).GetMethod ("GetDelegate", BindingFlags.Static | BindingFlags.Public);
+		private static MethodInfo delegateinvoke = typeof (Delegate).GetMethod ("DynamicInvoke", BindingFlags.Instance | BindingFlags.Public);
+                private static MethodInfo getmethodinfo = typeof (MethodBase).GetMethod ("GetMethodFromHandle", BindingFlags.Public | BindingFlags.Static, null, new Type [] { typeof (RuntimeMethodHandle) }, null);
 
 		private MethodInfo minfo;
 		private Type rettype;
@@ -46,9 +49,6 @@ namespace MonoMac.ObjCRuntime {
 
 			if (ea == null)
 				throw new ArgumentException ("MethodInfo does not have a export attribute");
-
-			if (minfo.DeclaringType.IsGenericType)
-				throw new ArgumentException ("MethodInfo cannot be in a generic type");
 
 			parms = minfo.GetParameters ();
 
@@ -81,63 +81,99 @@ namespace MonoMac.ObjCRuntime {
 			DynamicMethod method = new DynamicMethod (Guid.NewGuid ().ToString (), rettype, ParameterTypes, module, true);
 			ILGenerator il = method.GetILGenerator ();
 			
-			
-			for (int i = 0; i < parms.Length; i++) {
-				if (parms [i].ParameterType.IsByRef && (parms[i].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i].ParameterType.GetElementType () == typeof (NSObject))) {
-					il.DeclareLocal (parms [i].ParameterType.GetElementType ());
-				}
-			}
+			if (minfo.DeclaringType.IsGenericType) {
+				il.DeclareLocal (typeof (Delegate));
+				il.DeclareLocal (typeof (object []));
 
-#if !MONOMAC_BOOTSTRAP
-			for (int i = 2, j = 0; i < ParameterTypes.Length; i++) {
-				if (parms [i-2].ParameterType.IsByRef && (parms[i-2].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i-2].ParameterType.GetElementType () == typeof (NSObject))) {
-					il.Emit (OpCodes.Ldarg, i);
-					il.Emit (OpCodes.Ldind_I);
-					il.Emit (OpCodes.Call, getobject);
-					il.Emit (OpCodes.Stloc, j++);
-				}
-			}
-#endif
-
-			if (!minfo.IsStatic) {
 				il.Emit (OpCodes.Ldarg_0);
-				il.Emit (OpCodes.Castclass, minfo.DeclaringType);
-			}
+				il.Emit (OpCodes.Ldtoken, minfo);
+				il.Emit (OpCodes.Call, getmethodinfo);
+				il.Emit (OpCodes.Call, getgenericdelegate);
+				il.Emit (OpCodes.Stloc, 0);
 
-			for (int i = 2, j = 0; i < ParameterTypes.Length; i++) {
-				if (parms [i-2].ParameterType.IsByRef && (parms[i-2].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i-2].ParameterType.GetElementType () == typeof (NSObject)))
-					il.Emit (OpCodes.Ldloca_S, j++);
-				else
-					il.Emit (OpCodes.Ldarg, i);
-			}
-	
-			if (minfo.IsVirtual)
-				il.Emit (OpCodes.Callvirt, minfo);
-			else
-				il.Emit (OpCodes.Call, minfo);
+				il.Emit (OpCodes.Ldc_I4_S, ParameterTypes.Length);
+				il.Emit (OpCodes.Newarr, typeof(object));
+				il.Emit (OpCodes.Stloc, 1);
 
-#if !MONOMAC_BOOTSTRAP
-			for (int i = 2, j = 0; i < ParameterTypes.Length; i++) {
-				if (parms [i-2].ParameterType.IsByRef && (parms[i-2].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i-2].ParameterType.GetElementType () == typeof (NSObject))) {
-					Label done = il.DefineLabel ();
-					il.Emit (OpCodes.Ldloc, j);
-					il.Emit (OpCodes.Brfalse, done);
-					il.Emit (OpCodes.Ldloc, j++);
-					il.Emit (OpCodes.Call, gethandle);
+				for (int i = 0; i < ParameterTypes.Length; i++) {
+					il.Emit (OpCodes.Ldloc, 1);
+					il.Emit (OpCodes.Ldc_I4_S, i);
 					il.Emit (OpCodes.Ldarg, i);
-					il.Emit (OpCodes.Stind_I);
-					il.MarkLabel (done);
+					
+					if (ParameterTypes [i].IsValueType)
+						il.Emit (OpCodes.Box, ParameterTypes [i]);
+
+					il.Emit (OpCodes.Stelem_Ref);
 				}
-			}
-#endif
-			if (rettype == typeof (string)) {
-				il.Emit (OpCodes.Newobj, newnsstring);
+
+				il.Emit (OpCodes.Ldloc, 0);
+				il.Emit (OpCodes.Ldloc, 1);
+				il.Emit (OpCodes.Call, delegateinvoke);
+
+				if (rettype == typeof (void))
+					il.Emit (OpCodes.Pop);
+				else if (rettype.IsValueType)
+					il.Emit (OpCodes.Unbox);
+
+				il.Emit (OpCodes.Ret);
+			} else {
+				for (int i = 0; i < parms.Length; i++) {
+					if (parms [i].ParameterType.IsByRef && (parms[i].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i].ParameterType.GetElementType () == typeof (NSObject))) {
+						il.DeclareLocal (parms [i].ParameterType.GetElementType ());
+					}
+				}
+
 #if !MONOMAC_BOOTSTRAP
-			} else if (rettype.IsArray && (rettype.GetElementType () == typeof (NSObject) || rettype.GetElementType ().IsSubclassOf (typeof (NSObject)))) {
-				il.Emit (OpCodes.Call, buildarray);
+				for (int i = 2, j = 0; i < ParameterTypes.Length; i++) {
+					if (parms [i-2].ParameterType.IsByRef && (parms[i-2].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i-2].ParameterType.GetElementType () == typeof (NSObject))) {
+						il.Emit (OpCodes.Ldarg, i);
+						il.Emit (OpCodes.Ldind_I);
+						il.Emit (OpCodes.Call, getobject);
+						il.Emit (OpCodes.Stloc, j++);
+					}
+				}
 #endif
+
+				if (!minfo.IsStatic) {
+					il.Emit (OpCodes.Ldarg_0);
+					il.Emit (OpCodes.Castclass, minfo.DeclaringType);
+				}
+
+				for (int i = 2, j = 0; i < ParameterTypes.Length; i++) {
+					if (parms [i-2].ParameterType.IsByRef && (parms[i-2].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i-2].ParameterType.GetElementType () == typeof (NSObject)))
+						il.Emit (OpCodes.Ldloca_S, j++);
+					else
+						il.Emit (OpCodes.Ldarg, i);
+				}
+		
+				if (minfo.IsVirtual)
+					il.Emit (OpCodes.Callvirt, minfo);
+				else
+					il.Emit (OpCodes.Call, minfo);
+
+#if !MONOMAC_BOOTSTRAP
+				for (int i = 2, j = 0; i < ParameterTypes.Length; i++) {
+					if (parms [i-2].ParameterType.IsByRef && (parms[i-2].ParameterType.GetElementType ().IsSubclassOf (typeof (NSObject)) || parms[i-2].ParameterType.GetElementType () == typeof (NSObject))) {
+						Label done = il.DefineLabel ();
+						il.Emit (OpCodes.Ldloc, j);
+						il.Emit (OpCodes.Brfalse, done);
+						il.Emit (OpCodes.Ldloc, j++);
+						il.Emit (OpCodes.Call, gethandle);
+						il.Emit (OpCodes.Ldarg, i);
+						il.Emit (OpCodes.Stind_I);
+						il.MarkLabel (done);
+					}
+				}
+#endif
+				if (rettype == typeof (string)) {
+					il.Emit (OpCodes.Newobj, newnsstring);
+#if !MONOMAC_BOOTSTRAP
+				} else if (rettype.IsArray && (rettype.GetElementType () == typeof (NSObject) || rettype.GetElementType ().IsSubclassOf (typeof (NSObject)))) {
+					il.Emit (OpCodes.Call, buildarray);
+#endif
+				}
+				il.Emit (OpCodes.Ret);
 			}
-			il.Emit (OpCodes.Ret);
 
 			return method.CreateDelegate (DelegateType);
 		}

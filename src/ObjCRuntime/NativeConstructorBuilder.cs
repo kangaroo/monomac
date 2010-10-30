@@ -82,27 +82,33 @@ namespace MonoMac.ObjCRuntime {
 			
 			il.DeclareLocal (typeof (object));
 
-			il.Emit (OpCodes.Ldarg_0);
-			il.Emit (OpCodes.Call, trygetnsobject);
-			il.Emit (OpCodes.Brtrue, done);
+			if (cinfo.DeclaringType.IsGenericType) {
+				il.Emit (OpCodes.Ldstr, "Unable to construct a generic type from a native allocation");
+				il.Emit (OpCodes.Newobj, typeof (Exception).GetConstructor (new Type [] { typeof (string) }));
+				il.Emit (OpCodes.Throw);
+			} else {
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Call, trygetnsobject);
+				il.Emit (OpCodes.Brtrue, done);
 
-			il.Emit (OpCodes.Ldtoken, cinfo.DeclaringType);
-			il.Emit (OpCodes.Call, gettype);
-			il.Emit (OpCodes.Call, newobject);
-			il.Emit (OpCodes.Stloc_0);
-			il.Emit (OpCodes.Ldloc_0);
-			il.Emit (OpCodes.Ldarg_0);
-			il.Emit (OpCodes.Stfld, handlefld);
+				il.Emit (OpCodes.Ldtoken, cinfo.DeclaringType);
+				il.Emit (OpCodes.Call, gettype);
+				il.Emit (OpCodes.Call, newobject);
+				il.Emit (OpCodes.Stloc_0);
+				il.Emit (OpCodes.Ldloc_0);
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Stfld, handlefld);
 
-			il.Emit (OpCodes.Ldloc_0);
-			for (int i = 2; i < ParameterTypes.Length; i++) {
-				il.Emit (OpCodes.Ldarg, i);
+				il.Emit (OpCodes.Ldloc_0);
+				for (int i = 2; i < ParameterTypes.Length; i++) {
+					il.Emit (OpCodes.Ldarg, i);
+				}
+				il.Emit (OpCodes.Call, cinfo);
+
+				il.MarkLabel (done);
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Ret);
 			}
-			il.Emit (OpCodes.Call, cinfo);
-
-			il.MarkLabel (done);
-			il.Emit (OpCodes.Ldarg_0);
-			il.Emit (OpCodes.Ret);
 
 			return method.CreateDelegate (DelegateType);
 		}
