@@ -16,6 +16,7 @@ CORE_SOURCES =					\
 	./Foundation/NSObject.cs			\
 	./ImageKit/Enums.cs				\
 	./ObjCRuntime/Class.cs				\
+	./ObjCRuntime/GenericDelegateFactory.cs		\
 	./ObjCRuntime/Messaging.cs			\
 	./ObjCRuntime/NativeConstructorBuilder.cs	\
 	./ObjCRuntime/NativeImplementationBuilder.cs	\

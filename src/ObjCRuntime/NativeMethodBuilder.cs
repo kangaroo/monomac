@@ -36,6 +36,9 @@ namespace MonoMac.ObjCRuntime {
 		private static MethodInfo buildarray = typeof (NSArray).GetMethod ("FromNSObjects", BindingFlags.Static | BindingFlags.Public);
 		private static MethodInfo buildsarray = typeof (NSArray).GetMethod ("FromStrings", BindingFlags.Static | BindingFlags.Public);
 #endif
+		private static MethodInfo getgenericdelegate = typeof (GenericDelegateFactory).GetMethod ("GetDelegate", BindingFlags.Static | BindingFlags.Public);
+		private static MethodInfo delegateinvoke = typeof (Delegate).GetMethod ("DynamicInvoke", BindingFlags.Instance | BindingFlags.Public);
+                private static MethodInfo getmethodinfo = typeof (MethodBase).GetMethod ("GetMethodFromHandle", BindingFlags.Public | BindingFlags.Static, null, new Type [] { typeof (RuntimeMethodHandle) }, null);
 
 		private MethodInfo minfo;
 		private Type type;
@@ -47,9 +50,6 @@ namespace MonoMac.ObjCRuntime {
 		internal NativeMethodBuilder (MethodInfo minfo, Type type, ExportAttribute ea) {
 			if (ea == null)
 				throw new ArgumentException ("MethodInfo does not have a export attribute");
-
-			if (minfo.DeclaringType.IsGenericType)
-				throw new ArgumentException ("MethodInfo cannot be in a generic type");
 
 			Parameters = minfo.GetParameters ();
 
@@ -70,27 +70,75 @@ namespace MonoMac.ObjCRuntime {
 		internal override Delegate CreateDelegate () {
 			DynamicMethod method = new DynamicMethod (string.Format ("[{0}:{1}]", minfo.DeclaringType, minfo), rettype, ParameterTypes, module, true);
 			ILGenerator il = method.GetILGenerator ();
+			bool isgeneric = minfo.DeclaringType.IsGenericType;
+			int locoffset = isgeneric ? 2 : 0; 
+
+			if (isgeneric) {
+				il.DeclareLocal (typeof (Delegate));
+				il.DeclareLocal (typeof (object []));
+			}
 
 			DeclareLocals (il);
-			ConvertArguments (il, 0);
+			ConvertArguments (il, locoffset);
 #if DUMP_CALLS
 			il.Emit (OpCodes.Ldstr, string.Format ("Invoking {0} on a {1}", minfo.ToString (), type.ToString ()));
 			il.Emit (OpCodes.Call, typeof (Console).GetMethod ("WriteLine", new Type [] { typeof (string) }));
 #endif
 
-			if (!minfo.IsStatic) {
-				il.Emit (OpCodes.Ldarg, (isstret ? 1 : 0));
-				il.Emit (OpCodes.Castclass, type);
+			if (isgeneric) {
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Ldtoken, minfo);
+				il.Emit (OpCodes.Call, getmethodinfo);
+				il.Emit (OpCodes.Call, getgenericdelegate);
+				il.Emit (OpCodes.Stloc, 0);
+
+				il.Emit (OpCodes.Ldc_I4_S, ParameterTypes.Length);
+				il.Emit (OpCodes.Newarr, typeof(object));
+				il.Emit (OpCodes.Stloc, 1);
+
+				for (int i = ArgumentOffset, j = 0; i < ParameterTypes.Length; i++) {
+					il.Emit (OpCodes.Ldloc, 1);
+					il.Emit (OpCodes.Ldc_I4_S, i);
+
+					if (Parameters [i-ArgumentOffset].ParameterType.IsByRef && IsWrappedType (Parameters[i-ArgumentOffset].ParameterType.GetElementType ())) {
+						il.Emit (OpCodes.Ldloca_S, j+locoffset);
+						j++;
+					} else if (Parameters [i-ArgumentOffset].ParameterType.IsArray && IsWrappedType (Parameters [i-ArgumentOffset].ParameterType.GetElementType ())) {
+						il.Emit (OpCodes.Ldloc, j+locoffset);
+						j++;
+					} else if (typeof (INativeObject).IsAssignableFrom (Parameters [i-ArgumentOffset].ParameterType) && !IsWrappedType (Parameters [i-ArgumentOffset].ParameterType)) {
+						il.Emit (OpCodes.Ldarg, i);
+						il.Emit (OpCodes.Newobj, Parameters [i-ArgumentOffset].ParameterType.GetConstructor (BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new Type [] { typeof (IntPtr) }, null));
+	                                } else if (Parameters [i-ArgumentOffset].ParameterType == typeof (string)) {
+						il.Emit (OpCodes.Ldloc, j+locoffset);
+						j++;
+					} else if (Parameters [i-ArgumentOffset].ParameterType.IsValueType) {
+						il.Emit (OpCodes.Box, ParameterTypes [i]);
+					} else {
+						il.Emit (OpCodes.Ldarg, i);
+					}
+
+					il.Emit (OpCodes.Stelem_Ref);
+				}
+
+				il.Emit (OpCodes.Ldloc, 0);
+				il.Emit (OpCodes.Ldloc, 1);
+				il.Emit (OpCodes.Call, delegateinvoke);
+			} else {
+				if (!minfo.IsStatic) {
+					il.Emit (OpCodes.Ldarg, (isstret ? 1 : 0));
+					il.Emit (OpCodes.Castclass, type);
+				}
+	
+				LoadArguments (il, locoffset);
+	
+				if (minfo.IsVirtual)
+					il.Emit (OpCodes.Callvirt, minfo);
+				else
+					il.Emit (OpCodes.Call, minfo);
 			}
 
-			LoadArguments (il, 0);
-
-			if (minfo.IsVirtual)
-				il.Emit (OpCodes.Callvirt, minfo);
-			else
-				il.Emit (OpCodes.Call, minfo);
-
-			UpdateByRefArguments (il, 0);
+			UpdateByRefArguments (il, locoffset);
 
 			if (minfo.ReturnType == typeof (string)) {
 				il.Emit (OpCodes.Newobj, newnsstring);

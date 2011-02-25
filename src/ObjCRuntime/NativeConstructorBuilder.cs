@@ -74,35 +74,41 @@ namespace MonoMac.ObjCRuntime {
 				}
 			}
 
-			il.Emit (OpCodes.Ldarg_0);
-			il.Emit (OpCodes.Call, trygetnsobject);
-			il.Emit (OpCodes.Brtrue, done);
+			if (cinfo.DeclaringType.IsGenericType) {
+				il.Emit (OpCodes.Ldstr, "Unable to construct a generic type from a native allocation");
+				il.Emit (OpCodes.Newobj, typeof (Exception).GetConstructor (new Type [] { typeof (string) }));
+				il.Emit (OpCodes.Throw);
+			} else {
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Call, trygetnsobject);
+				il.Emit (OpCodes.Brtrue, done);
 
-			il.Emit (OpCodes.Ldtoken, cinfo.DeclaringType);
-			il.Emit (OpCodes.Call, gettype);
-			il.Emit (OpCodes.Call, newobject);
-			il.Emit (OpCodes.Stloc_0);
-			il.Emit (OpCodes.Ldloc_0);
-			il.Emit (OpCodes.Ldarg_0);
-			il.Emit (OpCodes.Stfld, handlefld);
+				il.Emit (OpCodes.Ldtoken, cinfo.DeclaringType);
+				il.Emit (OpCodes.Call, gettype);
+				il.Emit (OpCodes.Call, newobject);
+				il.Emit (OpCodes.Stloc_0);
+				il.Emit (OpCodes.Ldloc_0);
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Stfld, handlefld);
 
-			ConvertArguments (il, 1);
+				ConvertArguments (il, 1);
 
-			il.Emit (OpCodes.Ldloc_0);
-			il.Emit (OpCodes.Castclass, cinfo.DeclaringType);
+				il.Emit (OpCodes.Ldloc_0);
+				il.Emit (OpCodes.Castclass, cinfo.DeclaringType);
 
-			LoadArguments (il, 1);
+				LoadArguments (il, 1);
 
-			il.Emit (OpCodes.Call, cinfo);
+				il.Emit (OpCodes.Call, cinfo);
 
-			UpdateByRefArguments (il, 1);
+				UpdateByRefArguments (il, 1);
 
-			il.Emit (OpCodes.Ldloc_0);
-			il.Emit (OpCodes.Call, retain);
+				il.Emit (OpCodes.Ldloc_0);
+				il.Emit (OpCodes.Call, retain);
 
-			il.MarkLabel (done);
-			il.Emit (OpCodes.Ldarg_0);
-			il.Emit (OpCodes.Ret);
+				il.MarkLabel (done);
+				il.Emit (OpCodes.Ldarg_0);
+				il.Emit (OpCodes.Ret);
+			}
 
 			return method.CreateDelegate (DelegateType);
 		}
